@@ -176,16 +176,16 @@ export default function App() {
       <section className="hero">
         <div className="hero__inner">
           <h1 className="hero__title">
-            Facturas PDF<br />a Excel en segundos
+            Facturas PDF<br />a Excel
           </h1>
           <p className="hero__sub">
-            Procesamiento local — tus archivos nunca salen de tu navegador.
+            Procesamiento local de facturas<br />
             Sin costos, sin límites, sin servidores.
           </p>
           <div className="hero__badges">
-            <span className="hero-badge"><LockIcon /> 100% local</span>
-            <span className="hero-badge"><ZapIcon /> Sin conexión a AI</span>
-            <span className="hero-badge"><FreeIcon /> Gratuito</span>
+            <span className="hero-badge"><LockIcon /> Selecciona los archivos</span>
+            <span className="hero-badge"><ZapIcon /> Confirma para convertir</span>
+            <span className="hero-badge"><FreeIcon /> Descarga los resultados</span>
           </div>
         </div>
       </section>
