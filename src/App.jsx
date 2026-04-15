@@ -1,622 +1,542 @@
-import { useMemo, useRef, useState, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { extractPdfLines, parseInvoice } from "./utils/pdfParser.js";
 import { buildExcel, downloadWorkbook } from "./utils/excel.js";
 import "./App.css";
 
-function formatSize(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const MAX_FILES = 10;
+const MAX_MB    = 5;
+const MAX_BYTES = MAX_MB * 1024 * 1024;
+
+function fmtSize(b) {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+function fmtGs(n) {
+  return new Intl.NumberFormat("es-PY").format(Math.round(n));
 }
 
-function formatCurrency(n) {
-  return new Intl.NumberFormat("es-PY").format(Math.round(n || 0));
+// Simulates progress messages during processing
+const STEPS = [
+  { pct: 15, msg: "Leyendo estructura del documento…" },
+  { pct: 40, msg: "Extrayendo filas de productos…"    },
+  { pct: 70, msg: "Calculando totales…"                },
+  { pct: 90, msg: "Generando hoja Excel…"              },
+];
+
+function useProcessingSteps(status) {
+  const [stepIdx, setStepIdx] = useState(0);
+  const [pct, setPct] = useState(0);
+
+  useEffect(() => {
+    if (status !== "processing") { setStepIdx(0); setPct(0); return; }
+    let i = 0;
+    const tick = () => {
+      if (i >= STEPS.length) return;
+      setStepIdx(i);
+      setPct(STEPS[i].pct);
+      i++;
+    };
+    tick();
+    const id = setInterval(tick, 600);
+    return () => clearInterval(id);
+  }, [status]);
+
+  return { pct, msg: STEPS[stepIdx]?.msg ?? "" };
 }
 
-const STATUS_MAP = {
-  pending: {
-    label: "Pendiente",
-    tone: "pending",
-    helper: "Listo para conversión",
-  },
-  processing: {
-    label: "Procesando",
-    tone: "processing",
-    helper: "Extrayendo y estructurando datos",
-  },
-  done: {
-    label: "Completado",
-    tone: "done",
-    helper: "Archivo listo para descarga",
-  },
-  error: {
-    label: "Revisión requerida",
-    tone: "error",
-    helper: "No se pudo interpretar el documento",
-  },
-};
-
+// ── File card ────────────────────────────────────────────────────────────────
 function FileCard({ item, onProcess, onDownload, onRemove }) {
-  const state = STATUS_MAP[item.status];
-  const invoice = item.data;
-  const products = invoice?.productos?.length ?? 0;
+  const { pct, msg } = useProcessingSteps(item.status);
+  const inv = item.data;
 
   return (
-    <article className={`record-card record-card--${item.status}`}>
-      <div className="record-card__head">
-        <div className="record-card__file">
-          <div className="record-card__icon">
-            <PdfIcon />
-          </div>
+    <div className={`card card--${item.status}`} role="listitem">
+      {/* Left accent */}
+      <div className="card__accent" />
 
-          <div className="record-card__main">
-            <div className="record-card__title-row">
-              <p className="record-card__name" title={item.name}>
-                {item.name}
-              </p>
-              <span className={`status-chip status-chip--${state.tone}`}>
-                {item.status === "processing" && <span className="spinner" />}
-                {state.label}
-              </span>
-            </div>
-
-            <p className="record-card__meta">
-              <span>{formatSize(item.file.size)}</span>
-              <span className="dot" />
-              <span>{state.helper}</span>
-            </p>
-          </div>
-        </div>
-
-        <div className="record-card__actions">
-          {item.status === "pending" && (
-            <button className="btn btn--primary btn--sm" onClick={() => onProcess(item)}>
-              Convertir
-            </button>
-          )}
-
-          {item.status === "error" && (
-            <button className="btn btn--secondary btn--sm" onClick={() => onProcess(item)}>
-              Reintentar
-            </button>
-          )}
-
-          {item.status === "done" && (
-            <button className="btn btn--success btn--sm" onClick={() => onDownload(item)}>
-              <DownloadIcon />
-              Descargar Excel
-            </button>
-          )}
-
-          <button
-            className="btn btn--icon btn--sm"
-            onClick={() => onRemove(item.id)}
-            title="Eliminar archivo"
-            aria-label="Eliminar archivo"
-          >
-            <CloseIcon />
-          </button>
-        </div>
+      {/* PDF icon */}
+      <div className="card__icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="9" y1="13" x2="15" y2="13"/>
+          <line x1="9" y1="17" x2="12" y2="17"/>
+        </svg>
       </div>
 
-      <div className="record-card__body">
-        {item.status === "done" && invoice && (
-          <>
-            <div className="record-grid">
-              <InfoBlock
-                label="Documento"
-                value={invoice.metadata?.numero_documento || "No disponible"}
-              />
-              <InfoBlock label="Fecha" value={invoice.metadata?.fecha || "No disponible"} />
-              <InfoBlock label="Cliente" value={invoice.metadata?.cliente || "No identificado"} />
-              <InfoBlock label="Productos" value={`${products} ítem${products !== 1 ? "s" : ""}`} />
-            </div>
+      {/* Main content */}
+      <div className="card__body">
+        <div className="card__header">
+          <span className="card__name" title={item.name}>{item.name}</span>
+          <span className="card__size">{fmtSize(item.file.size)}</span>
+        </div>
 
-            <div className="record-tags">
-              {invoice.total > 0 && (
-                <span className="tag tag--amount">Total Gs. {formatCurrency(invoice.total)}</span>
-              )}
-              <span className="tag">Estructura preparada para exportación</span>
-            </div>
-          </>
-        )}
-
-        {item.status === "error" && item.error && (
-          <div className="notice notice--error">
-            <AlertIcon />
-            <span>{item.error}</span>
-          </div>
-        )}
-
+        {/* Processing progress */}
         {item.status === "processing" && (
-          <div className="notice notice--info">
-            <PulseIcon />
-            <span>El documento se está analizando localmente para generar una salida estructurada.</span>
+          <div className="card__progress-wrap">
+            <div className="card__progress-bar">
+              <div className="card__progress-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <span className="card__progress-msg">{msg}</span>
+          </div>
+        )}
+
+        {/* Error message */}
+        {item.status === "error" && (
+          <p className="card__error">{item.error}</p>
+        )}
+
+        {/* Results summary */}
+        {item.status === "done" && inv && (
+          <div className="card__results">
+            {inv.metadata?.cliente && (
+              <Chip icon={<UserIcon />} label={inv.metadata.cliente} />
+            )}
+            <Chip icon={<BoxIcon />} label={`${inv.productos?.length ?? 0} producto${inv.productos?.length !== 1 ? "s" : ""}`} highlight />
+            {inv.total > 0 && (
+              <Chip icon={<CoinsIcon />} label={`Gs. ${fmtGs(inv.total)}`} />
+            )}
+            {inv.metadata?.fecha && (
+              <Chip icon={<CalIcon />} label={inv.metadata.fecha} />
+            )}
           </div>
         )}
       </div>
-    </article>
-  );
-}
 
-function InfoBlock({ label, value }) {
-  return (
-    <div className="info-block">
-      <span className="info-block__label">{label}</span>
-      <span className="info-block__value">{value}</span>
-    </div>
-  );
-}
-
-function MetricCard({ label, value, tone = "default", helper, icon }) {
-  return (
-    <div className={`metric-card metric-card--${tone}`}>
-      <div className="metric-card__icon">{icon}</div>
-      <div>
-        <span className="metric-card__label">{label}</span>
-        <strong className="metric-card__value">{value}</strong>
-        {helper && <p className="metric-card__helper">{helper}</p>}
+      {/* Actions */}
+      <div className="card__actions">
+        {item.status === "pending" && (
+          <button className="btn btn--primary btn--sm" onClick={() => onProcess(item)}>
+            Convertir
+          </button>
+        )}
+        {item.status === "error" && (
+          <button className="btn btn--ghost btn--sm" onClick={() => onProcess(item)}>
+            Reintentar
+          </button>
+        )}
+        {item.status === "done" && (
+          <button className="btn btn--success btn--sm" onClick={() => onDownload(item)}>
+            <DownloadIcon />
+            <span>Descargar</span>
+          </button>
+        )}
+        {item.status !== "processing" && (
+          <button className="btn btn--icon" onClick={() => onRemove(item.id)} title="Eliminar archivo">
+            <TrashIcon />
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-function ChecklistItem({ title, text }) {
+function Chip({ icon, label, highlight }) {
   return (
-    <div className="check-item">
-      <span className="check-item__bullet" />
+    <span className={`chip${highlight ? " chip--hl" : ""}`}>
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+// ── Step indicator ────────────────────────────────────────────────────────────
+function StepBar({ step }) {
+  const steps = ["Cargar archivos", "Convertir", "Descargar Excel"];
+  return (
+    <div className="stepbar" role="navigation" aria-label="Pasos del proceso">
+      {steps.map((s, i) => {
+        const num   = i + 1;
+        const done  = step > num;
+        const active = step === num;
+        return (
+          <div key={i} className={`step ${done ? "step--done" : ""} ${active ? "step--active" : ""}`}>
+            <div className="step__dot">
+              {done ? <CheckIcon /> : <span>{num}</span>}
+            </div>
+            <span className="step__label">{s}</span>
+            {i < steps.length - 1 && <div className="step__line" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Summary bar ───────────────────────────────────────────────────────────────
+function SummaryBar({ files }) {
+  const done = files.filter(f => f.status === "done");
+  if (done.length === 0) return null;
+  const totalProds  = done.reduce((s, f) => s + (f.data?.productos?.length ?? 0), 0);
+  const totalAmount = done.reduce((s, f) => s + (f.data?.total ?? 0), 0);
+
+  return (
+    <div className="summary">
+      <SumStat value={done.length}   label="facturas procesadas" icon={<DocIcon />}   />
+      <div className="summary__div" />
+      <SumStat value={totalProds}    label="productos extraídos"  icon={<BoxIcon />}   />
+      <div className="summary__div" />
+      <SumStat value={`Gs. ${fmtGs(totalAmount)}`} label="monto total" icon={<CoinsIcon />} raw />
+    </div>
+  );
+}
+
+function SumStat({ value, label, icon, raw }) {
+  return (
+    <div className="sum-stat">
+      <div className="sum-stat__icon">{icon}</div>
       <div>
-        <p className="check-item__title">{title}</p>
-        <p className="check-item__text">{text}</p>
+        <p className="sum-stat__value">{raw ? value : value.toLocaleString("es-PY")}</p>
+        <p className="sum-stat__label">{label}</p>
       </div>
     </div>
   );
 }
 
+// ── Upload limits badge ───────────────────────────────────────────────────────
+function LimitsBadge() {
+  return (
+    <div className="limits">
+      <span className="limits__item">
+        <FilesIcon />
+        Hasta {MAX_FILES} archivos por lote
+      </span>
+      <span className="limits__sep" />
+      <span className="limits__item">
+        <WeightIcon />
+        Máx. {MAX_MB} MB por archivo
+      </span>
+      <span className="limits__sep" />
+      <span className="limits__item">
+        <PdfBadgeIcon />
+        Solo formato PDF
+      </span>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
   const [files, setFiles] = useState([]);
   const [dragging, setDragging] = useState(false);
+  const [rejections, setRejections] = useState([]);
   const inputRef = useRef(null);
 
   const addFiles = useCallback((rawFiles) => {
-    const items = Array.from(rawFiles)
-      .filter((file) => file.type === "application/pdf")
-      .map((file) => ({
-        id: crypto.randomUUID(),
-        file,
-        name: file.name,
-        status: "pending",
-        data: null,
-        error: null,
-      }));
+    const incoming = Array.from(rawFiles);
+    const rejected = [];
+    const accepted = [];
 
-    if (items.length) {
-      setFiles((previous) => [...previous, ...items]);
+    const currentCount = files.length;
+
+    for (const f of incoming) {
+      if (f.type !== "application/pdf") {
+        rejected.push(`"${f.name}" — no es un PDF`);
+        continue;
+      }
+      if (f.size > MAX_BYTES) {
+        rejected.push(`"${f.name}" — supera ${MAX_MB} MB (${fmtSize(f.size)})`);
+        continue;
+      }
+      if (currentCount + accepted.length >= MAX_FILES) {
+        rejected.push(`"${f.name}" — límite de ${MAX_FILES} archivos alcanzado`);
+        continue;
+      }
+      accepted.push({ id: crypto.randomUUID(), file: f, name: f.name, status: "pending", data: null, error: null });
     }
-  }, []);
+
+    if (accepted.length) setFiles(p => [...p, ...accepted]);
+    if (rejected.length) {
+      setRejections(rejected);
+      setTimeout(() => setRejections([]), 5000);
+    }
+  }, [files]);
 
   const processItem = async (item) => {
-    setFiles((previous) =>
-      previous.map((file) =>
-        file.id === item.id ? { ...file, status: "processing", error: null } : file
-      )
-    );
-
+    setFiles(p => p.map(f => f.id === item.id ? { ...f, status: "processing", error: null } : f));
     try {
       const lines = await extractPdfLines(item.file);
-      const data = parseInvoice(lines);
-
-      if (!data.productos || data.productos.length === 0) {
-        throw new Error(
-          "No se encontraron productos en el PDF. Verificá que el formato corresponda al documento esperado."
-        );
-      }
-
-      setFiles((previous) =>
-        previous.map((file) => (file.id === item.id ? { ...file, status: "done", data } : file))
-      );
-    } catch (error) {
-      setFiles((previous) =>
-        previous.map((file) =>
-          file.id === item.id
-            ? { ...file, status: "error", error: error.message || "Ocurrió un error inesperado." }
-            : file
-        )
-      );
+      const data  = parseInvoice(lines);
+      if (!data.productos || data.productos.length === 0)
+        throw new Error("No se encontraron productos. Verificá que sea una factura CJX S.A.");
+      setFiles(p => p.map(f => f.id === item.id ? { ...f, status: "done", data } : f));
+    } catch (e) {
+      setFiles(p => p.map(f => f.id === item.id ? { ...f, status: "error", error: e.message } : f));
     }
   };
 
   const processAll = async () => {
-    const actionableFiles = files.filter(
-      (file) => file.status === "pending" || file.status === "error"
-    );
-
-    for (const item of actionableFiles) {
-      await processItem(item);
-    }
+    const pending = files.filter(f => f.status === "pending" || f.status === "error");
+    for (const item of pending) await processItem(item);
   };
 
   const downloadItem = (item) => {
-    const workbook = buildExcel(item.data);
-    downloadWorkbook(workbook, item.name.replace(/\.pdf$/i, ".xlsx"));
+    const wb = buildExcel(item.data);
+    downloadWorkbook(wb, item.name.replace(/\.pdf$/i, ".xlsx"));
   };
 
-  const clearAll = () => setFiles([]);
-  const removeItem = (id) => setFiles((previous) => previous.filter((file) => file.id !== id));
+  const removeItem = (id) => setFiles(p => p.filter(f => f.id !== id));
 
-  const counts = useMemo(
-    () => ({
-      total: files.length,
-      pending: files.filter((file) => file.status === "pending").length,
-      processing: files.filter((file) => file.status === "processing").length,
-      done: files.filter((file) => file.status === "done").length,
-      error: files.filter((file) => file.status === "error").length,
-    }),
-    [files]
-  );
+  const counts = {
+    total:      files.length,
+    pending:    files.filter(f => f.status === "pending").length,
+    error:      files.filter(f => f.status === "error").length,
+    processing: files.filter(f => f.status === "processing").length,
+    done:       files.filter(f => f.status === "done").length,
+  };
 
   const actionable = counts.pending + counts.error;
-  const busy = counts.processing > 0;
+  const busy       = counts.processing > 0;
+  const allDone    = counts.total > 0 && counts.done === counts.total;
+
+  // Derive current step
+  const currentStep = counts.total === 0 ? 1 : allDone ? 3 : counts.processing > 0 || actionable > 0 ? 2 : 2;
 
   return (
-    <div className="app-shell">
-      <div className="app-shell__glow app-shell__glow--one" />
-      <div className="app-shell__glow app-shell__glow--two" />
-
+    <div className="shell">
+      {/* ── Header ── */}
       <header className="topbar">
         <div className="topbar__inner">
-          <div className="brand">
-            <div className="brand__mark">
-              <LogoIcon />
-            </div>
-            <div>
-              <p className="brand__name">DataBridge</p>
-              <p className="brand__sub">Conversión documental</p>
-            </div>
+          <div className="topbar__brand">
+            <LogoMark />
+            <span className="topbar__name">DataBridge</span>
+            <span className="topbar__version">v2</span>
           </div>
-
-          <div className="topbar__meta">
-            <span className="topbar__pill">
-              <LockIcon />
-              Operación local
-            </span>
-          </div>
+          <span className="topbar__sub">Conversión de facturas PDF · CJX S.A.</span>
         </div>
       </header>
 
-      <main className="dashboard">
-        <section className="hero-panel">
-          <div className="hero-panel__content">
-            <span className="eyebrow">Centro de procesamiento</span>
-            <h1>Convierte facturas PDF a Excel con una interfaz más clara y profesional.</h1>
-            <p>
-              Cargá múltiples documentos, controlá el estado de cada archivo y descargá resultados
-              estructurados en un flujo ordenado, limpio y orientado a operación.
+      <main className="main">
+        {/* ── Hero ── */}
+        <section className="hero">
+          <div className="hero__text">
+            <h1 className="hero__title">
+              Facturas <em>PDF</em> a Excel<br />listo para el WMS
+            </h1>
+            <p className="hero__desc">
+              Cargá tus facturas, convertí en un clic y descargá cada Excel con los datos estructurados — sin pasos intermedios, sin configuración.
             </p>
-
-            <div className="hero-panel__chips">
-              <span className="soft-chip">Carga múltiple</span>
-              <span className="soft-chip">Validación por archivo</span>
-              <span className="soft-chip">Exportación inmediata</span>
-            </div>
           </div>
-
-          <div className="hero-panel__summary">
-            <div className="summary-card summary-card--accent">
-              <span className="summary-card__label">Documentos cargados</span>
-              <strong className="summary-card__value">{counts.total}</strong>
-              <p className="summary-card__text">Seguimiento centralizado del lote actual.</p>
-            </div>
-
-            <div className="summary-card">
-              <span className="summary-card__label">Estado operativo</span>
-              <strong className="summary-card__value">
-                {counts.processing > 0 ? "En curso" : counts.error > 0 ? "Con observaciones" : "Disponible"}
-              </strong>
-              <p className="summary-card__text">
-                {counts.processing > 0
-                  ? "Hay archivos siendo procesados en este momento."
-                  : counts.error > 0
-                    ? "Algunos documentos requieren revisión o reintento."
-                    : "Podés cargar o convertir nuevos archivos cuando quieras."}
-              </p>
-            </div>
-          </div>
+          <StepBar step={currentStep} />
         </section>
 
-        <section className="workspace-grid">
-          <div className="surface surface--primary">
-            <div className="section-heading">
-              <div>
-                <span className="section-heading__eyebrow">Ingreso de documentos</span>
-                <h2>Carga de archivos</h2>
-              </div>
-              <button className="btn btn--secondary btn--sm" onClick={() => inputRef.current?.click()}>
-                Seleccionar PDFs
-              </button>
-            </div>
+        {/* ── Drop zone ── */}
+        {files.length < MAX_FILES && (
+          <div
+            className={`drop ${dragging ? "drop--active" : ""}`}
+            onDrop={e => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
+            onDragOver={e => { e.preventDefault(); setDragging(true); }}
+            onDragLeave={() => setDragging(false)}
+            onClick={() => inputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => e.key === "Enter" && inputRef.current?.click()}
+            aria-label="Zona de carga de archivos PDF"
+          >
+            <input ref={inputRef} type="file" accept=".pdf" multiple className="sr-only"
+              onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
 
-            <div
-              className={`dropzone ${dragging ? "dropzone--active" : ""}`}
-              onDrop={(event) => {
-                event.preventDefault();
-                setDragging(false);
-                addFiles(event.dataTransfer.files);
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDragging(true);
-              }}
-              onDragLeave={() => setDragging(false)}
-              onClick={() => inputRef.current?.click()}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  inputRef.current?.click();
-                }
-              }}
-              aria-label="Zona de carga de archivos PDF"
-            >
-              <input
-                ref={inputRef}
-                type="file"
-                accept=".pdf"
-                multiple
-                className="visually-hidden"
-                onChange={(event) => {
-                  addFiles(event.target.files);
-                  event.target.value = "";
-                }}
-              />
-
-              <div className="dropzone__icon">
-                <UploadIcon />
-              </div>
-              <p className="dropzone__title">
-                {dragging ? "Soltá los archivos aquí" : "Arrastrá tus PDFs o hacé clic para seleccionarlos"}
-              </p>
-              <p className="dropzone__text">
-                Compatible con carga múltiple y revisión individual por documento.
-              </p>
-            </div>
-          </div>
-
-          <aside className="surface surface--secondary">
-            <div className="section-heading section-heading--compact">
-              <div>
-                <span className="section-heading__eyebrow">Control operativo</span>
-                <h2>Buenas señales de uso</h2>
+            <div className={`drop__orbit ${dragging ? "drop__orbit--spin" : ""}`}>
+              <div className="drop__ring drop__ring--1" />
+              <div className="drop__ring drop__ring--2" />
+              <div className="drop__core">
+                <UploadIcon2 />
               </div>
             </div>
 
-            <div className="checklist">
-              <ChecklistItem
-                title="Proceso visible"
-                text="Cada archivo muestra su estado, detalles principales y acciones disponibles."
-              />
-              <ChecklistItem
-                title="Interfaz orientada a productividad"
-                text="Menos ruido visual, más foco en el lote actual y en la salida final."
-              />
-              <ChecklistItem
-                title="Descarga inmediata"
-                text="Cuando un archivo queda listo, la exportación está disponible al instante."
-              />
+            <p className="drop__primary">
+              {dragging ? "Soltá los archivos acá" : "Arrastrá PDFs o hacé clic para seleccionar"}
+            </p>
+            <p className="drop__hint">
+              {files.length > 0
+                ? `${files.length} de ${MAX_FILES} archivos cargados`
+                : "Podés seleccionar varios archivos a la vez"}
+            </p>
+          </div>
+        )}
+
+        {/* ── Limits badge ── */}
+        <LimitsBadge />
+
+        {/* ── Rejection toasts ── */}
+        {rejections.length > 0 && (
+          <div className="toasts" role="alert">
+            {rejections.map((r, i) => (
+              <div key={i} className="toast">
+                <WarnIcon />
+                {r}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── Summary ── */}
+        <SummaryBar files={files} />
+
+        {/* ── Toolbar ── */}
+        {files.length > 0 && (
+          <div className="toolbar">
+            <div className="toolbar__left">
+              <CountPill n={counts.total}      label="archivos"    />
+              {counts.done > 0       && <CountPill n={counts.done}       label="listos"     variant="success" />}
+              {counts.error > 0      && <CountPill n={counts.error}      label="con error"  variant="error"   />}
+              {counts.processing > 0 && <CountPill n={counts.processing} label="procesando" variant="info"    />}
             </div>
-          </aside>
-        </section>
-
-        <section className="metrics-grid">
-          <MetricCard
-            label="Total"
-            value={counts.total}
-            helper="Archivos cargados en esta sesión"
-            icon={<StackIcon />}
-          />
-          <MetricCard
-            label="Pendientes"
-            value={counts.pending}
-            tone="pending"
-            helper="Listos para convertir"
-            icon={<ClockIcon />}
-          />
-          <MetricCard
-            label="En proceso"
-            value={counts.processing}
-            tone="processing"
-            helper="Trabajándose ahora"
-            icon={<PulseIcon />}
-          />
-          <MetricCard
-            label="Completados"
-            value={counts.done}
-            tone="done"
-            helper="Disponibles para descarga"
-            icon={<CheckCircleIcon />}
-          />
-          <MetricCard
-            label="Observaciones"
-            value={counts.error}
-            tone="error"
-            helper="Documentos con error"
-            icon={<AlertIcon />}
-          />
-        </section>
-
-        <section className="surface surface--primary">
-          <div className="section-heading section-heading--with-actions">
-            <div>
-              <span className="section-heading__eyebrow">Lote actual</span>
-              <h2>Archivos procesados</h2>
-            </div>
-
-            <div className="toolbar-actions">
-              <button className="btn btn--ghost btn--sm" onClick={clearAll} disabled={files.length === 0}>
+            <div className="toolbar__right">
+              <button className="btn btn--ghost btn--sm" onClick={() => setFiles([])}>
                 Limpiar todo
               </button>
-              <button
-                className="btn btn--primary btn--sm"
-                onClick={processAll}
-                disabled={actionable === 0 || busy}
-              >
-                {busy
-                  ? "Procesando..."
-                  : actionable === 0
-                    ? "Sin pendientes"
-                    : `Convertir ${actionable === counts.total ? "todo" : `restantes (${actionable})`}`}
-              </button>
+              {actionable > 0 && !busy && (
+                <button className="btn btn--primary btn--sm" onClick={processAll}>
+                  <ConvertIcon />
+                  Convertir {actionable === counts.total ? "todos" : `restantes (${actionable})`}
+                </button>
+              )}
+              {allDone && (
+                <span className="all-done-badge">
+                  <CheckIcon />
+                  Todo listo
+                </span>
+              )}
             </div>
           </div>
+        )}
 
-          {files.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-state__icon">
-                <FolderIcon />
-              </div>
-              <h3>No hay archivos cargados</h3>
-              <p>
-                Empezá arrastrando facturas en PDF para ver el seguimiento del lote y la descarga de
-                resultados desde este mismo panel.
-              </p>
+        {/* ── File list ── */}
+        {files.length > 0 && (
+          <div className="file-list" role="list" aria-label="Archivos cargados">
+            {files.map(item => (
+              <FileCard key={item.id} item={item}
+                onProcess={processItem}
+                onDownload={downloadItem}
+                onRemove={removeItem} />
+            ))}
+          </div>
+        )}
+
+        {/* ── Empty state ── */}
+        {files.length === 0 && (
+          <div className="empty">
+            <div className="empty__features">
+              <Feature icon={<LockIcon />}  title="Procesamiento local" desc="Los archivos se procesan en tu navegador. No se envía ningún dato a servidores externos." />
+              <Feature icon={<SpeedIcon />} title="Extracción directa"  desc="Lee y estructura el contenido del PDF automáticamente: código, descripción, precios y totales." />
+              <Feature icon={<XlsIcon />}   title="Excel estructurado"  desc="Genera un .xlsx con hoja de información y hoja de productos, listo para importar al WMS." />
             </div>
-          ) : (
-            <div className="record-list">
-              {files.map((item) => (
-                <FileCard
-                  key={item.id}
-                  item={item}
-                  onProcess={processItem}
-                  onDownload={downloadItem}
-                  onRemove={removeItem}
-                />
-              ))}
-            </div>
-          )}
-        </section>
+          </div>
+        )}
       </main>
 
       <footer className="footer">
-        <p>Diseño operativo · Presentación profesional · Conversión local</p>
+        <span>Procesamiento local · Sin servidores · Sin costo</span>
+        <span className="footer__sep" />
+        <span>CJX S.A. · Sistema de migración de datos</span>
       </footer>
     </div>
   );
 }
 
-function LogoIcon() {
+function CountPill({ n, label, variant = "default" }) {
+  return <span className={`cpill cpill--${variant}`}><strong>{n}</strong> {label}</span>;
+}
+
+function Feature({ icon, title, desc }) {
   return (
-    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-      <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="url(#logo-gradient)" />
-      <path d="M6.5 14.5h3l2.2-6 3.6 9 1.7-4h1.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    <div className="feature">
+      <div className="feature__icon">{icon}</div>
+      <h3 className="feature__title">{title}</h3>
+      <p className="feature__desc">{desc}</p>
+    </div>
+  );
+}
+
+// ── Icons ─────────────────────────────────────────────────────────────────────
+function LogoMark() {
+  return (
+    <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
+      <rect width="30" height="30" rx="8" fill="url(#lg)" />
       <defs>
-        <linearGradient id="logo-gradient" x1="3" y1="3" x2="21" y2="21" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#7C3AED" />
-          <stop offset="1" stopColor="#2563EB" />
+        <linearGradient id="lg" x1="0" y1="0" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stopColor="#38BDF8" />
+          <stop offset="100%" stopColor="#2DD4BF" />
         </linearGradient>
       </defs>
+      <path d="M8 15h4l2-6 3 11 2-5h3" stroke="#0A0F1E" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   );
 }
-
-function UploadIcon() {
+function UploadIcon2() {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3.75v11.5" />
-      <path d="M7.75 8 12 3.75 16.25 8" />
-      <path d="M4 15.5v1.25A3.25 3.25 0 0 0 7.25 20h9.5A3.25 3.25 0 0 0 20 16.75V15.5" />
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 4v10m0-10L8 8m4-4l4 4"/>
+      <path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
     </svg>
   );
 }
-
-function PdfIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />
-      <path d="M14 2v5h5" />
-      <path d="M8.5 14.5h1.25a1.75 1.75 0 1 0 0-3.5H8.5v6" />
-      <path d="M14 11h1.5a2 2 0 0 1 0 4H14z" />
-    </svg>
-  );
-}
-
 function DownloadIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 3v12" />
-      <path d="m7 10 5 5 5-5" />
-      <path d="M4 19h16" />
+      <path d="M12 4v12m0 0l-4-4m4 4l4-4"/>
+      <path d="M4 17v1a2 2 0 002 2h12a2 2 0 002-2v-1"/>
     </svg>
   );
 }
-
-function CloseIcon() {
+function TrashIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M6 6l12 12M18 6 6 18" />
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
+      <path d="M10 11v6M14 11v6M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
     </svg>
   );
 }
-
+function CheckIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+  );
+}
+function ConvertIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9"/>
+      <path d="M20 20v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+  );
+}
+function UserIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+}
+function BoxIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>;
+}
+function CoinsIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1110.34 18"/><path d="M7 6h1v4"/><path d="M16.71 13.88l.7.71-2.82 2.82"/></svg>;
+}
+function CalIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+}
+function DocIcon() {
+  return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
+}
+function WarnIcon() {
+  return <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+}
 function LockIcon() {
-  return (
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="11" width="18" height="10" rx="2" />
-      <path d="M8 11V7a4 4 0 1 1 8 0v4" />
-    </svg>
-  );
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>;
 }
-
-function StackIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m12 3 9 4.5-9 4.5L3 7.5 12 3Z" />
-      <path d="m3 12.5 9 4.5 9-4.5" />
-      <path d="m3 17 9 4 9-4" />
-    </svg>
-  );
+function SpeedIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>;
 }
-
-function ClockIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="8" />
-      <path d="M12 8v4l2.5 2" />
-    </svg>
-  );
+function XlsIcon() {
+  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>;
 }
-
-function PulseIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M22 12h-4l-2.5 5-4-10-2.5 5H2" />
-    </svg>
-  );
+function FilesIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>;
 }
-
-function CheckCircleIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="12" cy="12" r="9" />
-      <path d="m8.5 12.2 2.4 2.3 4.8-5" />
-    </svg>
-  );
+function WeightIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 20a1 1 0 001 1h2a1 1 0 001-1v-1H10v1z"/><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M12 6V3"/><circle cx="12" cy="3" r="1"/></svg>;
 }
-
-function AlertIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 8v4" />
-      <path d="M12 16h.01" />
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.72 3h16.92a2 2 0 0 0 1.72-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-    </svg>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
-    </svg>
-  );
+function PdfBadgeIcon() {
+  return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
 }
