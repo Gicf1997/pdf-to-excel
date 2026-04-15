@@ -238,7 +238,10 @@ export default function App() {
     const currentCount = files.length;
 
     for (const f of incoming) {
-      if (f.type !== "application/pdf") {
+      // Some PDFs (e.g. electronic invoices with embedded XML) are detected as
+      // application/octet-stream — fall back to extension check.
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      if (!isPdf) {
         rejected.push(`"${f.name}" — no es un PDF`);
         continue;
       }
