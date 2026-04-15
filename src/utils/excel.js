@@ -1,7 +1,7 @@
 import * as XLSX from "xlsx";
 
-const LABEL_MAP = {
-  fecha: "Fecha",
+const META_LABELS = {
+  fecha: "Fecha Emisión",
   numero_documento: "Nro. Documento",
   cliente: "Cliente",
   ruc: "RUC",
@@ -13,21 +13,20 @@ const LABEL_MAP = {
 
 export function buildExcel(invoice) {
   const wb = XLSX.utils.book_new();
-
-  // ── Sheet 1: Invoice metadata ────────────────────────────────────────────
   const meta = invoice.metadata || {};
+
+  // ── Hoja 1: Información general ─────────────────────────────────────────
   const infoRows = [
     ["Campo", "Valor"],
-    ...Object.entries(LABEL_MAP).map(([k, label]) => [label, meta[k] ?? ""]),
+    ...Object.entries(META_LABELS).map(([k, label]) => [label, meta[k] ?? ""]),
     [],
-    ["Total Factura", invoice.total ?? ""],
+    ["Total Factura", invoice.total ?? 0],
   ];
   const wsInfo = XLSX.utils.aoa_to_sheet(infoRows);
-  wsInfo["!cols"] = [{ wch: 24 }, { wch: 44 }];
+  wsInfo["!cols"] = [{ wch: 24 }, { wch: 46 }];
   XLSX.utils.book_append_sheet(wb, wsInfo, "Información");
 
-  // ── Sheet 2: Products ────────────────────────────────────────────────────
-  const prods = invoice.productos || [];
+  // ── Hoja 2: Productos ────────────────────────────────────────────────────
   const headers = [
     "Código",
     "Código de Barra",
@@ -37,6 +36,8 @@ export function buildExcel(invoice) {
     "Gravadas 10%",
     "Total Línea",
   ];
+
+  const prods = invoice.productos || [];
   const rows = prods.map((p) => [
     p.codigo,
     p.codigo_barra,
@@ -44,8 +45,9 @@ export function buildExcel(invoice) {
     p.descripcion,
     p.precio_unitario,
     p.gravadas_10,
-    (p.cantidad ?? 0) * (p.precio_unitario ?? 0),
+    p.total_linea ?? p.cantidad * p.precio_unitario,
   ]);
+
   const grandTotal = rows.reduce((s, r) => s + (r[6] ?? 0), 0);
   const totalRow = ["", "", "", "TOTAL", "", "", grandTotal];
 
@@ -54,7 +56,7 @@ export function buildExcel(invoice) {
     { wch: 13 },
     { wch: 19 },
     { wch: 10 },
-    { wch: 48 },
+    { wch: 50 },
     { wch: 17 },
     { wch: 17 },
     { wch: 17 },
