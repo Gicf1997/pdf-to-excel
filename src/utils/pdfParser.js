@@ -4,26 +4,16 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PDF text extraction
+// PDF text extraction — each page processed independently, then concatenated
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function extractPdfLines(file) {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const allItems = [];
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-    const page = await pdf.getPage(pageNum);
-    const content = await page.getTextContent();
-    for (const item of content.items) {
-      if (item.str.trim()) {
-        allItems.push({ x: item.transform[4], y: item.transform[5], page: pageNum, text: item.str.trim() });
-      }
-    }
-  }
-  allItems.sort((a, b) => b.y - a.y || a.x - b.x);
+function pageToLines(items) {
+  // Sort top-to-bottom, then left-to-right within same Y
+  items.sort((a, b) => b.y - a.y || a.x - b.x);
+
   const rows = [];
   let currentRow = [], currentY = null;
-  for (const item of allItems) {
+  for (const item of items) {
     if (currentY === null || Math.abs(item.y - currentY) <= 4) {
       currentRow.push(item);
       if (currentY === null) currentY = item.y;
@@ -34,17 +24,34 @@ export async function extractPdfLines(file) {
     }
   }
   if (currentRow.length) rows.push(currentRow);
-  return rows.map((row) => row.map((i) => i.text).join(" "));
+
+  // Sort each row by X so columns are always in reading order
+  return rows.map((row) => {
+    row.sort((a, b) => a.x - b.x);
+    return row.map((i) => i.text).join(" ");
+  });
+}
+
+export async function extractPdfLines(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  const allLines = [];
+  for (let p = 1; p <= pdf.numPages; p++) {
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    const items = content.items
+      .filter((i) => i.str?.trim())
+      .map((i) => ({ x: i.transform[4], y: i.transform[5], text: i.str.trim() }));
+    allLines.push(...pageToLines(items));
+  }
+  return allLines;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Paraguayan number format:
- *   "1.202.400,00" → 1202400  |  "131.000" → 131000  |  "2,000" → 2  |  "8,00" → 8
- */
 function parseNum(str) {
   if (!str) return 0;
   const n = parseFloat(str.replace(/\./g, "").replace(",", "."));
@@ -60,10 +67,7 @@ function grab(text, regex) {
   return m ? m[1].trim() : "";
 }
 
-/**
- * Unified product code pattern covering all CJX formats:
- *   001-17002  002-B1814  006-007-81  055-380-1  066-892431  006-007-190
- */
+// All CJX product code variants: 001-17002  002-B1814  006-007-81  055-380-1  066-892431
 const PRODUCT_CODE_RE = /^\d{3}-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)?$/;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,16 +80,9 @@ function detectDocType(fullText) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FACTURA line parser
+// Factura line parser
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Factura line variants:
- *   WITH barcode    → CODE  BARCODE(≥10 digits)  QTY  DESC  PRICE  EX  G5  G10
- *   WITHOUT barcode → CODE  QTY  DESC  PRICE  EX  G5  G10
- *
- * Collects exactly 4 trailing price tokens from the right.
- */
 function parseFacturaLine(line) {
   const tokens = line.trim().split(/\s+/);
   if (!PRODUCT_CODE_RE.test(tokens[0])) return null;
@@ -93,87 +90,116 @@ function parseFacturaLine(line) {
   const codigo = tokens[0];
   let idx = 1;
 
-  // Optional barcode (≥10 consecutive digits, may start with 0)
   let codigo_barra = "";
   if (idx < tokens.length && /^\d{10,}$/.test(tokens[idx])) {
-    codigo_barra = tokens[idx];
-    idx++;
+    codigo_barra = tokens[idx++];
   }
 
-  // Quantity
   if (idx >= tokens.length || !isPriceToken(tokens[idx])) return null;
-  const cantidad = parseNum(tokens[idx]);
-  idx++;
+  const cantidad = parseNum(tokens[idx++]);
 
-  // Need description + 4 price columns
   const rest = tokens.slice(idx);
   if (rest.length < 5) return null;
 
-  let rightIdx = rest.length - 1;
-  const trailing = [];
-  while (rightIdx >= 0 && trailing.length < 4 && isPriceToken(rest[rightIdx])) {
-    trailing.unshift(rest[rightIdx]);
-    rightIdx--;
-  }
-  if (trailing.length < 4) return null;
+  let ri = rest.length - 1;
+  const trail = [];
+  while (ri >= 0 && trail.length < 4 && isPriceToken(rest[ri])) trail.unshift(rest[ri--]);
+  if (trail.length < 4) return null;
 
-  const descripcion = rest.slice(0, rightIdx + 1).join(" ").trim();
+  const descripcion = rest.slice(0, ri + 1).join(" ").trim();
   if (!descripcion) return null;
 
-  const [precio_unitario, , , gravadas_10] = trailing.map(parseNum);
-
+  const [precio_unitario, , , gravadas_10] = trail.map(parseNum);
   return { codigo, codigo_barra, cantidad, descripcion, precio_unitario, gravadas_10, total_linea: cantidad * precio_unitario };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NOTA DE REMISIÓN line parser
+// Remisión line parser
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Remisión line format: CODE  QTY(X,000)  DESCRIPTION...
- * No price columns.
- */
 function parseRemisionLine(line) {
   const tokens = line.trim().split(/\s+/);
   if (!PRODUCT_CODE_RE.test(tokens[0])) return null;
+  if (tokens.length < 3) return null;
+  if (!isPriceToken(tokens[1])) return null;
 
-  const codigo = tokens[0];
-  const idx = 1;
-
-  if (idx >= tokens.length || !isPriceToken(tokens[idx])) return null;
-  const cantidad = parseNum(tokens[idx]);
-
-  const descripcion = tokens.slice(idx + 1).join(" ").trim();
+  const cantidad = parseNum(tokens[1]);
+  const descripcion = tokens.slice(2).join(" ").trim();
   if (!descripcion) return null;
+  if (/^\d[\d.,]*$/.test(tokens[2])) return null; // guard: next token shouldn't be a price
 
-  // Guard: if the "description" is purely numeric it's probably a factura misread
-  if (/^\d[\d.,]*$/.test(tokens[idx + 1])) return null;
-
-  return { codigo, cantidad, descripcion };
+  return { codigo: tokens[0], cantidad, descripcion };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Metadata extraction
+// Fallback: lenient scan when primary parser finds nothing
+// ─────────────────────────────────────────────────────────────────────────────
+
+function fallbackScan(lines, docType) {
+  const results = [];
+  for (const line of lines) {
+    const tokens = line.trim().split(/\s+/);
+    if (!PRODUCT_CODE_RE.test(tokens[0]) || tokens.length < 2) continue;
+
+    const codigo = tokens[0];
+    let qtyIdx = -1;
+    for (let i = 1; i < Math.min(tokens.length, 4); i++) {
+      if (isPriceToken(tokens[i])) { qtyIdx = i; break; }
+    }
+    if (qtyIdx === -1) continue;
+
+    const cantidad = parseNum(tokens[qtyIdx]);
+    const remaining = tokens.slice(qtyIdx + 1);
+
+    if (docType === "remision") {
+      const descripcion = remaining.join(" ").trim();
+      if (descripcion) results.push({ codigo, cantidad, descripcion });
+    } else {
+      const trail = [];
+      let ri = remaining.length - 1;
+      while (ri >= 0 && trail.length < 4 && isPriceToken(remaining[ri])) trail.unshift(remaining[ri--]);
+      const descripcion = remaining.slice(0, ri + 1).join(" ").trim();
+      if (!descripcion) continue;
+      const precio_unitario = trail.length >= 1 ? parseNum(trail[0]) : 0;
+      const gravadas_10 = trail.length >= 4 ? parseNum(trail[3]) : 0;
+      results.push({ codigo, codigo_barra: "", cantidad, descripcion, precio_unitario, gravadas_10, total_linea: cantidad * precio_unitario });
+    }
+  }
+  return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deduplication for multi-page remisión (Original / Duplicado / Triplicado)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function deduplicateProducts(products) {
+  const seen = new Set();
+  return products.filter((p) => {
+    if (seen.has(p.codigo)) return false;
+    seen.add(p.codigo);
+    return true;
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Metadata
 // ─────────────────────────────────────────────────────────────────────────────
 
 function extractClientName(lines) {
-  // Try "Nombre o Razon Social: Estoy Las Mercedes" (remisión format — inline)
   for (const line of lines) {
     const m = line.match(/nombre\s+o\s+razon\s+social[:\s]+(.+)/i);
     if (m) {
       const val = m[1].trim();
-      if (val && !/^\s*$/.test(val) && !/^ruc/i.test(val)) return val;
+      if (val && !/^ruc/i.test(val)) return val;
     }
   }
-  // Fallback: "Nombre Cliente:" label then next standalone line (factura format)
   const labelIdx = lines.findIndex((l) => /nombre\s+cliente/i.test(l));
   if (labelIdx !== -1) {
     for (let i = labelIdx + 1; i <= labelIdx + 5 && i < lines.length; i++) {
       const l = lines[i].trim();
-      if (!l || /^[\d\-\/]+$/.test(l)) continue;
-      if (/^\d{2}[-\/]/i.test(l)) continue;
-      if (/[:\s]+(ruc|tel|dir|nro|fecha|cond|vend)/i.test(l)) continue;
-      if (/^(avda|mcal|calle|av\.|rua)/i.test(l)) continue;
+      if (!l || /^[\d\-\/]+$/.test(l) || /^\d{2}[-\/]/i.test(l)) continue;
+      if (/[:\s]+(ruc|tel|dir|nro|fecha)/i.test(l)) continue;
+      if (/^(avda|mcal|calle|av\.)/i.test(l)) continue;
       if (/[A-Za-záéíóúÁÉÍÓÚñÑ]/.test(l) && l.length > 2) return l;
     }
   }
@@ -207,52 +233,21 @@ function extractFacturaMetadata(lines, full) {
 }
 
 function extractRemisionMetadata(lines, full) {
-  // "Fecha de Emision: 9 de Abril de 2026"
-  const fecha =
-    grab(full, /fecha\s+de\s+emisi[oó]n[:\s]+([^\n\r]+)/i) ||
-    grab(full, /fecha\s+emisi[oó]n[:\s]+([^\n\r]+)/i);
-
-  // "Nro.: 001-009-0000377" — appears standalone after labels
-  const numero_documento =
-    grab(full, /nro\.[:\s]+([\d\-]+)/i) ||
-    grab(full, /nro\s+reg[:\s]+([\d\-]+)/i);
-
-  // "Nro. Reg.: 58521"
-  const nro_reg = grab(full, /nro\.\s*reg\.?[:\s]+([\d]+)/i);
-
-  // Timbrado
-  const timbrado = grab(full, /timbrado\s+nro\.?[:\s]+([\d]+)/i);
-
   return {
     tipo_documento: "Nota de Remisión",
-    fecha: fecha.replace(/^\s+/, ""),
-    numero_documento,
-    nro_reg,
-    timbrado,
+    fecha:
+      grab(full, /fecha\s+de\s+emisi[oó]n[:\s]+([^\n\r]+)/i) ||
+      grab(full, /fecha\s+emisi[oó]n[:\s]+([^\n\r]+)/i),
+    numero_documento: grab(full, /nro\.[:\s]+([\d\-]+)/i),
+    nro_reg: grab(full, /nro\.\s*reg\.?[:\s]+([\d]+)/i),
+    timbrado: grab(full, /timbrado\s+nro\.?[:\s]+([\d]+)/i),
     cliente: extractClientName(lines),
     punto_partida: grab(full, /punto\s+de\s+partida[:\s]+([^\n\r]+)/i),
     punto_llegada: grab(full, /punto\s+de\s+llegada[:\s]+([^\n\r]+)/i),
     motivo: grab(full, /motivo\s+de\s+traslado[:\s]+([^\n\r]+)/i),
-    vehiculo: grab(full, /marca\s+del\s+vehiculo[:\s]+([^\n\rN]+?)(?:Nro|$)/i),
     rua: grab(full, /RUA\)[:.\s]+([\w]+)/i),
     conductor: grab(full, /nombre\s+y\s+apellido[^:]*[:\s]+([^\n\rR]+?)(?:ruc|$)/i),
   };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Deduplication for multi-page remisión (Original / Duplicado / Triplicado)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function deduplicateProducts(productos) {
-  const seen = new Set();
-  const unique = [];
-  for (const p of productos) {
-    if (!seen.has(p.codigo)) {
-      seen.add(p.codigo);
-      unique.push(p);
-    }
-  }
-  return unique;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -265,22 +260,22 @@ export function parseInvoice(lines) {
 
   if (docType === "remision") {
     const metadata = extractRemisionMetadata(lines, full);
-    const raw = [];
-    for (const line of lines) {
-      const p = parseRemisionLine(line);
-      if (p) raw.push(p);
-    }
+
+    let raw = lines.map(parseRemisionLine).filter(Boolean);
+    if (raw.length === 0) raw = fallbackScan(lines, "remision");
+
     const productos = deduplicateProducts(raw);
+    if (productos.length === 0) throw new Error("No se encontraron productos. Verificá que sea un documento CJX S.A. válido.");
+
     return { docType: "remision", metadata, productos, total: 0 };
   }
 
   // Factura
   const metadata = extractFacturaMetadata(lines, full);
-  const productos = [];
-  for (const line of lines) {
-    const p = parseFacturaLine(line);
-    if (p) productos.push(p);
-  }
+  let productos = lines.map(parseFacturaLine).filter(Boolean);
+  if (productos.length === 0) productos = fallbackScan(lines, "factura");
+  if (productos.length === 0) throw new Error("No se encontraron productos. Verificá que sea una factura CJX S.A. válida.");
+
   const totalMatch = full.match(/total\s+a\s+pagar[^0-9]*([\d.,]+)/i);
   const total = totalMatch
     ? parseNum(totalMatch[1])
