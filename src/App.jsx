@@ -90,12 +90,18 @@ function FileCard({ item, onProcess, onDownload, onRemove }) {
         {/* Results summary */}
         {item.status === "done" && inv && (
           <div className="card__results">
+            <Chip icon={inv.docType === "remision" ? <RemisionIcon /> : <FacturaIcon />}
+              label={inv.docType === "remision" ? "Nota de Remisión" : "Factura"}
+              cls={inv.docType === "remision" ? "chip--remision" : "chip--factura"} />
             {inv.metadata?.cliente && (
               <Chip icon={<UserIcon />} label={inv.metadata.cliente} />
             )}
-            <Chip icon={<BoxIcon />} label={`${inv.productos?.length ?? 0} producto${inv.productos?.length !== 1 ? "s" : ""}`} highlight />
-            {inv.total > 0 && (
+            <Chip icon={<BoxIcon />} label={`${inv.productos?.length ?? 0} ${inv.docType === "remision" ? "artículo" : "producto"}${(inv.productos?.length ?? 0) !== 1 ? "s" : ""}`} highlight />
+            {inv.docType === "factura" && inv.total > 0 && (
               <Chip icon={<CoinsIcon />} label={`Gs. ${fmtGs(inv.total)}`} />
+            )}
+            {inv.docType === "remision" && (
+              <Chip icon={<TruckIcon />} label={inv.metadata?.motivo ?? "Traslado"} />
             )}
             {inv.metadata?.fecha && (
               <Chip icon={<CalIcon />} label={inv.metadata.fecha} />
@@ -169,7 +175,8 @@ function SummaryBar({ files }) {
   const done = files.filter(f => f.status === "done");
   if (done.length === 0) return null;
   const totalProds  = done.reduce((s, f) => s + (f.data?.productos?.length ?? 0), 0);
-  const totalAmount = done.reduce((s, f) => s + (f.data?.total ?? 0), 0);
+  const facturas = done.filter(f => f.data?.docType !== 'remision');
+  const totalAmount = facturas.reduce((s, f) => s + (f.data?.total ?? 0), 0);
 
   return (
     <div className="summary">
@@ -177,7 +184,7 @@ function SummaryBar({ files }) {
       <div className="summary__div" />
       <SumStat value={totalProds}    label="productos extraídos"  icon={<BoxIcon />}   />
       <div className="summary__div" />
-      <SumStat value={`Gs. ${fmtGs(totalAmount)}`} label="monto total" icon={<CoinsIcon />} raw />
+      {totalAmount > 0 && <><div className="summary__div" /><SumStat value={`Gs. ${fmtGs(totalAmount)}`} label="monto facturas" icon={<CoinsIcon />} raw /></>}
     </div>
   );
 }
@@ -539,4 +546,13 @@ function WeightIcon() {
 }
 function PdfBadgeIcon() {
   return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
+}
+function FacturaIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>;
+}
+function RemisionIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>;
+}
+function TruckIcon() {
+  return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>;
 }
