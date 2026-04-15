@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useCallback } from "react";
 import { extractPdfLines, parseInvoice } from "./utils/pdfParser.js";
 import { buildExcel, downloadWorkbook } from "./utils/excel.js";
-import "./App_moderno.css";
+import "./App.css";
 
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
