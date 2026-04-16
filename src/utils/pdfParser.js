@@ -199,9 +199,13 @@ function extractFacturaMetadata(full) {
   // "... Documento: FE Cre 001-009" → take rest of line
   const numero_documento = grab(full, /documento[:\s]+([^\n\r]+)/i);
 
+  // Invoice counter: short number right-aligned on the address line ("204400 9885")
+  const nro_factura = grab(full, /204400\s+(\d{2,6})(?:\s|$)/im);
+
   return {
     tipo_documento:   "Factura",
     fecha,
+    nro_factura,
     numero_documento: numero_documento.trim(),
     cliente:          cliente.replace(/\s{2,}.*$/, "").trim(), // strip any trailing multi-space + garbage
     ruc:              grab(full, /\bRuc[:\s]+([\d\-]+)/i),

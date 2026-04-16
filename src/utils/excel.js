@@ -3,6 +3,7 @@ import * as XLSX from "xlsx";
 const FACTURA_META = {
   tipo_documento:   "Tipo de Documento",
   fecha:            "Fecha Emisión",
+  nro_factura:      "Nro. Factura",
   numero_documento: "Nro. Documento",
   cliente:          "Cliente",
   ruc:              "RUC",

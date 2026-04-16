@@ -139,7 +139,7 @@ function DataTable({ data, docType }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FACTURA_LABELS = {
-  tipo_documento: "Tipo", fecha: "Fecha", numero_documento: "Documento",
+  tipo_documento: "Tipo", fecha: "Fecha", nro_factura: "Nro. Factura", numero_documento: "Documento",
   cliente: "Cliente", ruc: "RUC", direccion: "Dirección",
   telefono: "Teléfono", condicion_venta: "Condición", vendedor: "Vendedor",
 };
