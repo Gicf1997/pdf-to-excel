@@ -70,8 +70,53 @@ function buildRemisionExcel(invoice) {
   return wb;
 }
 
+const PACKING_META = {
+  tipo_documento:      "Tipo de Documento",
+  numero_packing_list: "Packing List Nro.",
+  shipper:             "Shipper",
+  consignee:           "Consignee",
+  transporte:          "Medio de Transporte",
+  condicion_pago:      "Condición de Pago",
+  net_weight_total:    "Net Weight Total",
+  gross_weight_total:  "Gross Weight Total",
+  pallets:             "Pallets",
+};
+
+function buildPackingListExcel(invoice) {
+  const wb = XLSX.utils.book_new();
+  const meta = invoice.metadata || {};
+
+  const wsHeader = XLSX.utils.aoa_to_sheet([
+    ["Campo", "Valor"],
+    ...Object.entries(PACKING_META).map(([k, label]) => [label, meta[k] ?? ""]),
+  ]);
+  wsHeader["!cols"] = [{ wch: 24 }, { wch: 46 }];
+  XLSX.utils.book_append_sheet(wb, wsHeader, "Cabecera");
+
+  const headers = ["Cantidad", "NCM", "Código", "Descripción", "Lote", "Vencimiento",
+    "Master Box", "Unidades", "Cant./KG", "Net Weight", "Gross Weight"];
+  const prods = invoice.productos || [];
+  const rows = prods.map((p) => [
+    p.quant, p.ncm, p.codigo, p.description, p.lote, p.validade,
+    p.master_box, p.unidades, p.cantidad, p.net_weight, p.gross_weight,
+  ]);
+  const totalNet   = prods.reduce((s, p) => s + (p.net_weight   ?? 0), 0);
+  const totalGross = prods.reduce((s, p) => s + (p.gross_weight ?? 0), 0);
+  const totalRow   = ["", "", "", "TOTALES", "", "", "", "", "", +totalNet.toFixed(2), +totalGross.toFixed(2)];
+
+  const wsDetail = XLSX.utils.aoa_to_sheet([headers, ...rows, totalRow]);
+  wsDetail["!cols"] = [
+    { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 50 }, { wch: 12 }, { wch: 12 },
+    { wch: 12 }, { wch: 11 }, { wch: 12 }, { wch: 12 }, { wch: 13 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsDetail, "Detalle");
+  return wb;
+}
+
 export function buildExcel(invoice) {
-  return invoice.docType === "remision" ? buildRemisionExcel(invoice) : buildFacturaExcel(invoice);
+  if (invoice.docType === "packing_list") return buildPackingListExcel(invoice);
+  if (invoice.docType === "remision")     return buildRemisionExcel(invoice);
+  return buildFacturaExcel(invoice);
 }
 
 export function downloadWorkbook(wb, filename) {

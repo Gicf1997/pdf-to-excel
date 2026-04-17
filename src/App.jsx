@@ -74,9 +74,25 @@ const REMISION_COLS = [
   colHelper.accessor("descripcion", { header: "Descripción", size: 400 }),
 ];
 
+const PACKING_COLS = [
+  colHelper.accessor("quant",        { header: "Cant.",       size: 70,  meta: { align: "right" } }),
+  colHelper.accessor("codigo",       { header: "Código",      size: 120 }),
+  colHelper.accessor("description",  { header: "Descripción", size: 230 }),
+  colHelper.accessor("lote",         { header: "Lote",        size: 85  }),
+  colHelper.accessor("validade",     { header: "Vencimiento", size: 95  }),
+  colHelper.accessor("master_box",   { header: "Master Box",  size: 85,  meta: { align: "right" } }),
+  colHelper.accessor("unidades",     { header: "Unidades",    size: 75,  meta: { align: "right" } }),
+  colHelper.accessor("net_weight",   { header: "Net Wt.",     size: 90,  meta: { align: "right", fmt: true } }),
+  colHelper.accessor("gross_weight", { header: "Gross Wt.",   size: 90,  meta: { align: "right", fmt: true } }),
+];
+
 function DataTable({ data, docType }) {
   const [sorting, setSorting] = useState([]);
-  const columns = useMemo(() => docType === "remision" ? REMISION_COLS : FACTURA_COLS, [docType]);
+  const columns = useMemo(() => {
+    if (docType === "packing_list") return PACKING_COLS;
+    if (docType === "remision")     return REMISION_COLS;
+    return FACTURA_COLS;
+  }, [docType]);
 
   const table = useReactTable({
     data,
@@ -143,6 +159,11 @@ const FACTURA_LABELS = {
   cliente: "Cliente", ruc: "RUC", direccion: "Dirección",
   telefono: "Teléfono", condicion_venta: "Condición", vendedor: "Vendedor",
 };
+const PACKING_LABELS = {
+  tipo_documento: "Tipo", numero_packing_list: "Packing List Nro.", shipper: "Shipper",
+  consignee: "Consignee", transporte: "Transporte", condicion_pago: "Condición de Pago",
+  net_weight_total: "Net Weight Total", gross_weight_total: "Gross Weight Total", pallets: "Pallets",
+};
 const REMISION_LABELS = {
   tipo_documento: "Tipo", fecha: "Fecha", numero_documento: "Nro. Remisión",
   nro_reg: "Nro. Reg.", timbrado: "Timbrado", cliente: "Destinatario",
@@ -151,7 +172,9 @@ const REMISION_LABELS = {
 };
 
 function MetaGrid({ metadata, docType }) {
-  const labels = docType === "remision" ? REMISION_LABELS : FACTURA_LABELS;
+  const labels = docType === "packing_list" ? PACKING_LABELS
+    : docType === "remision" ? REMISION_LABELS
+    : FACTURA_LABELS;
   const pairs = Object.entries(labels)
     .map(([k, label]) => [label, metadata?.[k] ?? ""])
     .filter(([, v]) => v);
@@ -209,6 +232,13 @@ function PreviewPanel({ item, onClose }) {
             {inv.docType === "remision" && (
               <div className="preview__total">
                 Total unidades: <strong>{inv.productos?.reduce((s, p) => s + p.cantidad, 0)}</strong>
+              </div>
+            )}
+            {inv.docType === "packing_list" && (
+              <div className="preview__total">
+                Net Weight: <strong>{inv.metadata?.net_weight_total ?? "—"} kg</strong>
+                {" · "}Gross Weight: <strong>{inv.metadata?.gross_weight_total ?? "—"} kg</strong>
+                {inv.metadata?.pallets && <>{" · "}Pallets: <strong>{inv.metadata.pallets}</strong></>}
               </div>
             )}
           </>
@@ -290,19 +320,22 @@ function FileCard({ item, isExpanded, onTogglePreview, onProcess, onDownload, on
 
           {item.status === "done" && inv && (
             <div className="card__chips">
-              <span className={`chip ${inv.docType === "remision" ? "chip--remision" : "chip--factura"}`}>
-                {inv.docType === "remision" ? <RemisionIcon /> : <FacturaIcon />}
-                {inv.docType === "remision" ? "Nota de Remisión" : "Factura"}
+              <span className={`chip ${inv.docType === "packing_list" ? "chip--packing" : inv.docType === "remision" ? "chip--remision" : "chip--factura"}`}>
+                {inv.docType === "packing_list" ? <PackingIcon /> : inv.docType === "remision" ? <RemisionIcon /> : <FacturaIcon />}
+                {inv.docType === "packing_list" ? "Packing List" : inv.docType === "remision" ? "Nota de Remisión" : "Factura"}
               </span>
               {inv.metadata?.cliente && <span className="chip"><UserIcon />{inv.metadata.cliente}</span>}
               <span className="chip chip--hl">
                 <BoxIcon />
-                {inv.productos?.length ?? 0} {inv.docType === "remision" ? "artículos" : "productos"}
+                {inv.productos?.length ?? 0} {inv.docType === "remision" ? "artículos" : inv.docType === "packing_list" ? "SKUs" : "productos"}
               </span>
               {inv.docType === "factura" && inv.total > 0 && (
                 <span className="chip"><CoinsIcon />Gs. {fmtGs(inv.total)}</span>
               )}
-              {inv.metadata?.fecha && <span className="chip"><CalIcon />{inv.metadata.fecha}</span>}
+              {inv.docType === "packing_list" && inv.metadata?.net_weight_total && (
+                <span className="chip"><WeightChipIcon />Net: {inv.metadata.net_weight_total} kg</span>
+              )}
+              {inv.metadata?.fecha && inv.docType !== "packing_list" && <span className="chip"><CalIcon />{inv.metadata.fecha}</span>}
             </div>
           )}
         </div>
@@ -712,3 +745,5 @@ function WeightIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" f
 function PdfBadgeIcon() { return <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>; }
 function FacturaIcon() { return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="15" y2="17" /></svg>; }
 function RemisionIcon() { return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="1" y="3" width="15" height="13" rx="1" /><path d="M16 8h4l3 4v4h-7V8z" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>; }
+function PackingIcon() { return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M21 10V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16v-2"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/><line x1="17" y1="14" x2="22" y2="14"/><line x1="22" y1="11" x2="22" y2="17"/></svg>; }
+function WeightChipIcon() { return <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="6" r="4"/><path d="M8 6h8"/><path d="M4 20h16l-2-10H6L4 20z"/></svg>; }
