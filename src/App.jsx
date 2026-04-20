@@ -502,7 +502,7 @@ export default function App() {
     try {
       const lines = await extractPdfLines(item.file);
       const data  = parseInvoice(lines);
-      if (!data.productos?.length) throw new Error("No se encontraron productos. Verificá que sea un documento CJX S.A. válido.");
+      if (!data.productos?.length) throw new Error("No se encontraron productos. Verificá que sea un documento válido.");
       setFiles((p) => p.map((f) => f.id === item.id ? { ...f, status: "done", data } : f));
     } catch (e) {
       setFiles((p) => p.map((f) => f.id === item.id ? { ...f, status: "error", error: e.message } : f));
@@ -559,7 +559,7 @@ export default function App() {
       <header className="topbar">
         <div className="topbar__inner">
           <div className="topbar__brand"><LogoMark /><span className="topbar__name">DataBridge</span><span className="topbar__version">v2</span></div>
-          <span className="topbar__sub">Conversión de facturas PDF · CJX S.A.</span>
+          <span className="topbar__sub">Conversión de facturas PDF</span>
         </div>
       </header>
 
@@ -592,7 +592,7 @@ export default function App() {
               <div className="drop__core"><UploadIcon /></div>
             </div>
             <p className="drop__primary">{dragging ? "Soltá los archivos acá" : "Arrastrá PDFs o hacé clic para seleccionar"}</p>
-            <p className="drop__hint">{files.length > 0 ? `${files.length} de ${MAX_FILES} archivos cargados` : "Facturas y notas de remisión CJX S.A."}</p>
+            <p className="drop__hint">{files.length > 0 ? `${files.length} de ${MAX_FILES} archivos cargados` : "Documentos válidos"}</p>
           </div>
         )}
 
@@ -685,7 +685,7 @@ export default function App() {
       <footer className="footer">
         <span>Procesamiento local · Sin servidores · Sin costo</span>
         <span className="footer__sep" />
-        <span>CJX S.A. · Sistema de migración de datos</span>
+        <span>Sistema de migración de datos</span>
       </footer>
     </div>
   );
