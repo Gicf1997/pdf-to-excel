@@ -502,7 +502,7 @@ export default function App() {
     try {
       const lines = await extractPdfLines(item.file);
       const data  = parseInvoice(lines);
-      if (!data.productos?.length) throw new Error("No se encontraron productos. Verificá que sea un documento válido.");
+      if (!data.productos?.length) throw new Error("No se encontraron productos. Verificá que sea un documento con formato válido.");
       setFiles((p) => p.map((f) => f.id === item.id ? { ...f, status: "done", data } : f));
     } catch (e) {
       setFiles((p) => p.map((f) => f.id === item.id ? { ...f, status: "error", error: e.message } : f));
