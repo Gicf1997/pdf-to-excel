@@ -95,7 +95,10 @@ function parseRemisionLine(line) {
   if (!CJX_CODE.test(t[0]) || t.length < 3) return null;
   if (!isPriceToken(t[1])) return null;
   const qty = parseNum(t[1]); const desc = t.slice(2).join(" ").trim();
-  if (!desc || /^\d[\d.,]*$/.test(t[2])) return null;
+  // Guard: description must contain at least one letter.
+  // This allows descriptions starting with numbers (e.g. "12 LIMIT BREAKER", "5PULG.")
+  // while still rejecting lines where everything after qty is numeric (price columns).
+  if (!desc || !/[A-Za-záéíóúÁÉÍÓÚñÑ]/.test(desc)) return null;
   return { codigo: t[0], cantidad: qty, descripcion: desc };
 }
 function fallbackRemision(lines) {
@@ -250,7 +253,7 @@ export function parseInvoice(lines) {
     if (raw.length === 0) raw = fallbackRemision(lines);
     const productos = dedup(raw);
     if (productos.length === 0)
-      throw new Error("No se encontraron productos. Verific\u00E1 que sea un documento CJX S.A. v\u00E1lido.");
+      throw new Error("No se encontraron productos. Verific\u00E1 que sea un documento v\u00E1lido.");
     return { docType: "remision", metadata, productos, total: 0 };
   }
 
@@ -258,7 +261,7 @@ export function parseInvoice(lines) {
   let productos = lines.map(parseFacturaLine).filter(Boolean);
   if (productos.length === 0) productos = fallbackFactura(lines);
   if (productos.length === 0)
-    throw new Error("No se encontraron productos. Verific\u00E1 que sea un documento CJX S.A. v\u00E1lido.");
+    throw new Error("No se encontraron productos. Verific\u00E1 que sea un documento v\u00E1lido.");
 
   const totalMatch = full.match(/total\s+a\s+pagar[^0-9]*([\d.,]+)/i);
   const total = totalMatch
